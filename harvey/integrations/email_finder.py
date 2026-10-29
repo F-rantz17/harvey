@@ -99,7 +99,10 @@ def _clean_domain(domain: str) -> str:
 
 
 def _clean_name_part(value: str) -> str:
-    return re.sub(r"[^a-z]", "", (value or "").lower())
+    """Lower-case ASCII local-part text: "Nadège" -> "nadege", not "nadge"."""
+    import unicodedata
+    value = unicodedata.normalize("NFKD", value or "").encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"[^a-z]", "", value.lower())
 
 
 def build_email(pattern: str, first: str, last: str, domain: str) -> str:

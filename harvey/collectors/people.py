@@ -20,6 +20,7 @@ Each person comes back as a dict:
 import html as html_lib
 import json
 import re
+import unicodedata
 from urllib.parse import unquote, urljoin, urlparse
 
 from harvey.collectors.profile import (
@@ -71,7 +72,32 @@ def _word_ok(token: str) -> bool:
     return not _NOUN_SUFFIX.search(low)
 
 
+def _fold(text: str) -> str:
+    """ASCII-fold for shape checks only: "Nadège" -> "Nadege", "Anaïs" -> "Anais"."""
+    return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+
+
 def split_person_name(text: str) -> tuple[str, str] | None:
+    """Accent-aware wrapper: checks the folded name, keeps the real spelling."""
+    text = html_lib.unescape(text or "").replace("\xa0", " ")
+    text = re.sub(r"\s+", " ", text).strip(" ,.-|–—")
+    folded = _fold(text)
+    if len(folded.split()) != len(text.split()):
+        return None
+    got = _split_ascii_name(folded)
+    if not got:
+        return None
+    if folded == text:
+        return got
+    # Map the folded result back onto the original tokens.
+    orig, fold = text.split(), folded.split()
+    first_i = fold.index(got[0].split()[0])
+    last_n = len(got[1].split())
+    end = len(fold) - fold[::-1].index(got[1].split()[-1])
+    return orig[first_i], " ".join(orig[end - last_n:end])
+
+
+def _split_ascii_name(text: str) -> tuple[str, str] | None:
     """(first, last) for a real-looking personal name, else None.
 
     Drops honorifics ("Dr."), middle initials ("Renata D. Ashby"),
@@ -275,7 +301,12 @@ def title_names_other_org(title: str, domain: str, site_name: str = "") -> bool:
     for m in _TITLE_ORG.finditer(title or ""):
         org = m.group(1).strip()
         if re.fullmatch(r"(?i)(?:and\s+)?(?:owner|founder|co-?founder|ceo|cto|coo|cmo|president|"
-                        r"principal|partner|director|chief[\w\s]*|operations|executive officer)", org):
+                        r"principal|partner|director|chief[\w\s]*|operations|executive officer|"
+                        r"(?:global\s+|digital\s+|retail\s+)?(?:marketing|brand(?:ing)?|sales|"
+                        r"communications|creative|design|product|content|e-?commerce|partnerships|"
+                        r"public relations|pr|merchandising|retail|growth|digital|social(?: media)?|"
+                        r"photography|art|events|people|finance|operations)"
+                        r"(?:\s+(?:and|&)\s+\w+)*)", org):
             continue
         if not names_business(org, domain, site_name):
             return True
@@ -500,7 +531,9 @@ def people_from_schema(html: str, url: str = "") -> list[dict]:
 
 # ── owners named in prose ────────────────────────────────────────────────
 
-_CAP = r"[A-Z][a-z]+(?:[-'’][A-Z]?[a-z]+)*"
+# Accented letters count (Nadège, Renée, Anaïs); split_person_name folds them for its checks.
+_UP, _LO = "A-ZÀ-ÖØ-Þ", "a-zß-öø-ÿ"
+_CAP = rf"[{_UP}][{_LO}]+(?:[-'’][{_UP}]?[{_LO}]+)*"
 _NAME_RE = (rf"(?:Dr\.?\s+)?(?P<name>{_CAP}(?:\s+[A-Z]\.)?(?:\s+(?:{'|'.join(sorted(_PARTICLES))}))*"
             rf"\s+{_CAP}(?:\s+{_CAP})?)")
 _OWNER_WORD = (r"(?P<title>(?i:co-?owner|owner|co-?founder|founder|proprietor|president|ceo|"
@@ -529,6 +562,9 @@ _PROSE = (
     (re.compile(rf"{_NAME_RE}\s+(?i:co-?founded|founded|started|launched|established|opened)\s+"
                 rf"(?P<org>(?i:the\s+(?:company|business|firm|practice|agency))|[A-Z][\w&'’.-]*(?:\s+(?:[A-Z][\w&'’.-]*|&))*)"),
      "Founder"),
+    # "Odessa Vance is the Founder of Vance Studio" (DTC about pages)
+    (re.compile(rf"{_NAME_RE}\s+is\s+(?i:the|our)\s+{_OWNER_WORD}(?:\s+(?i:and|&)\s+[\w ]{{3,30}}?)?\s+(?i:of)\s+"
+                rf"(?P<org>(?:the\s+)?[A-Z][\w&'’.-]*(?:\s+(?:[A-Z][\w&'’.-]*|&))*)"), None),
     # "the office of Dr. Maren Hollis Pryor", "the practice of Dr. ..."
     (re.compile(rf"(?i:\b(?:the\s+)?(?:office|practice|clinic)\s+of)\s+Dr\.?\s+{_NAME_RE}"), "Owner"),
 )
@@ -604,6 +640,39 @@ def people_from_prose(html: str, domain: str, site_name: str = "", url: str = ""
                         and not names_business(m_org.group(1), domain, site_name):
                     continue
                 add(groups["name"], title, sentence)
+
+    # Fashion / DTC about pages, where the founder talks in the first person
+    # or sits under a "Meet the founder" heading:
+    #   "My name is Idris Okafor. I'm the founder and creative director of LOW TIDE"
+    #   "Meet Our Founder" / "Selma Haddad is a first-generation ..."
+    #   "meet the founder" / "Maren Kelleher"
+    sents = _sentences(html)
+    for i, sentence in enumerate(sents):
+        m = re.search(rf"(?i:\bmy name is)\s+{_NAME_RE}", sentence)
+        if not m:
+            continue
+        nxt = " ".join(sents[i:i + 2])
+        role = re.search(r"(?i)\bI(?:'|’)?m\s+(?:the\s+|a\s+)?(co-?founder|founder|owner|creative director|ceo)"
+                         r"((?:\s+(?:and|&)\s+(?:the\s+)?creative director)?)", nxt)
+        if role:
+            title = _title_word(role.group(1)) if role.group(1).lower() != "creative director" else "Creative Director"
+            if role.group(2):
+                title += " & Creative Director"
+            add(m.group("name"), title, sentence)
+    lines = page_lines(html)
+    for i, line in enumerate(lines):
+        h = re.fullmatch(r"(?i)\s*meet\s+(?:our|the)\s+(co-?founders?|founders?|owners?)\s*:?\s*", line)
+        if not h:
+            continue
+        role = "Co-founder" if "co" in h.group(1).lower() else ("Owner" if "owner" in h.group(1).lower() else "Founder")
+        for nxt in lines[i + 1:i + 3]:
+            if split_person_name(nxt):
+                add(nxt.strip(), role, f"{line} / {nxt}")
+                break
+            lead = re.match(rf"^{_NAME_RE}\s+(?:is|was born|grew up|has|started|founded)\b", nxt)
+            if lead:
+                add(lead.group("name"), role, f"{line} / {nxt[:120]}")
+                break
 
     # "I founded the Fairbanks Law Firm" on a bio page: the person is the one
     # the page is about, named in its <title> or first heading.

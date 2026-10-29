@@ -60,3 +60,8 @@ harvey.local.yaml
 # Backups and in-progress writes from `harvey train` hold the same config.
 harvey.local.yaml.*
 harvey.yaml.*
+
+# Brand research: your prospect list, saved pages and results stay on this Mac
+brand-research/brands.txt
+brand-research/pages/
+brand-research/results/

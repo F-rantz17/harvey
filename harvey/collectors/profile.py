@@ -95,11 +95,20 @@ TECH_FINGERPRINTS: dict[str, tuple[str, ...]] = {
     "Housecall Pro": (r"housecallpro",),
     "CallRail": (r"cdn\.callrail\.com",),
     "Stripe": (r"js\.stripe\.com",),
+    "Meta Pixel": (r"connect\.facebook\.net/[^\"']*fbevents\.js", r"pixel_type\\*\"\s*:\s*\\*\"facebook_pixel"),
+    "TikTok Pixel": (r"analytics\.tiktok\.com", r"pixelCode\\*\"\s*:\s*\\*\"[A-Z0-9]{12,}"),
+    "Pinterest Tag": (r"s\.pinimg\.com/ct/core\.js", r"pintrk\(", r"\"apiClientId\"\s*:\s*3009811\b"),
+    "Klaviyo": (r"static\.klaviyo\.com", r"\"apiClientId\"\s*:\s*123074\b"),
 }
 
 GOOGLE_ADS = (r"googleadservices\.com", r"gtag/js\?id=AW-", r"google_conversion",
-              r"googletagmanager\.com/gtag/js\?id=AW-")
-META_PIXEL = (r"connect\.facebook\.net/[^\"']*fbevents\.js", r"fbq\s*\(\s*['\"]init")
+              r"googletagmanager\.com/gtag/js\?id=AW-",
+              # A Google Ads conversion ID in an inline gtag config or Shopify's pixel list.
+              r"['\"\\]AW-\d{9,12}\b")
+META_PIXEL = (r"connect\.facebook\.net/[^\"']*fbevents\.js", r"fbq\s*\(\s*['\"]init",
+              # Shopify stores load Meta's pixel through the Web Pixels list
+              # (Facebook & Instagram app), never as a fbevents.js tag.
+              r"pixel_type\\*\"\s*:\s*\\*\"facebook_pixel")
 
 BOOKING_HINTS = (r"calendly\.com", r"acuityscheduling", r"schedulicity",
                  r"squareup\.com/appointments", r"setmore", r"book(ing)?[-_]?now",
