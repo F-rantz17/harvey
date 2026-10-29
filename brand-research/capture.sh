@@ -19,13 +19,29 @@ fetch() {  # fetch URL FILE -> prints final URL on success
   curl -sSL --compressed --max-time 20 -A "$UA" -o "$2" -w '%{http_code} %{url_effective}' "$1" 2>/dev/null
 }
 
+# Same-site About/Team/Contact links in a saved page. Kept in a function (not
+# inside $( )) because macOS's bash 3.2 mis-parses case patterns there.
+page_links() {  # page_links FILE BASE HOST
+  grep -oiE 'href="[^"#]+"' "$1" | sed -E 's/^[hH][rR][eE][fF]="//; s/"$//; s/&amp;/\&/g' \
+    | grep -iE "$WANT" | grep -viE "$SKIP" \
+    | while IFS= read -r h; do
+        case "$h" in
+          (http*) h_host="$(echo "$h" | sed -E 's#^https?://##; s#/.*##; s#^www\.##')"
+                  if [ "$h_host" = "$3" ]; then echo "$h"; fi ;;
+          (//*|mailto:*|tel:*|javascript:*) : ;;
+          (/*) echo "$2$h" ;;
+          (*) echo "$2/$h" ;;
+        esac
+      done | sed -E 's#\?.*##; s#/$##' | awk '!seen[$0]++' | head -n "$MAX_PAGES"
+}
+
 [ -f "$LIST" ] || { echo "No brand list at $LIST"; exit 1; }
 mkdir -p "$OUT"
 ok=0; fail=0
 while IFS= read -r line || [ -n "$line" ]; do
   line="$(echo "$line" | sed -E 's/#.*//; s/^[[:space:]]+//; s/[[:space:]]+$//')"
   [ -z "$line" ] && continue
-  case "$line" in http*) home="$line" ;; *) home="https://$line" ;; esac
+  case "$line" in (http*) home="$line" ;; (*) home="https://$line" ;; esac
   home="${home%/}/"
   domain="$(echo "$home" | sed -E 's#^https?://##; s#/.*##; s#^www\.##')"
   dir="$OUT/$domain"; mkdir -p "$dir"; : > "$dir/urls.txt"
@@ -38,17 +54,7 @@ while IFS= read -r line || [ -n "$line" ]; do
   base="$(echo "$final" | sed -E 's#^(https?://[^/]+).*#\1#')"
   host="$(echo "$base" | sed -E 's#^https?://##; s#^www\.##')"
   # About / team / contact links on the homepage, same site only.
-  links="$(grep -oiE 'href="[^"#]+"' "$dir/00-home.html" | sed -E 's/^[hH][rR][eE][fF]="//; s/"$//; s/&amp;/\&/g' \
-    | grep -iE "$WANT" | grep -viE "$SKIP" \
-    | while IFS= read -r h; do
-        case "$h" in
-          http*) h_host="$(echo "$h" | sed -E 's#^https?://##; s#/.*##; s#^www\.##')"; [ "$h_host" = "$host" ] && echo "$h" ;;
-          //*) ;;
-          /*) echo "$base$h" ;;
-          mailto:*|tel:*|javascript:*) ;;
-          *) echo "$base/$h" ;;
-        esac
-      done | sed -E 's#\?.*##; s#/$##' | awk '!seen[$0]++' | head -n "$MAX_PAGES")"
+  links="$(page_links "$dir/00-home.html" "$base" "$host")"
   n=0
   for u in $links; do
     n=$((n+1)); f="$(printf '%02d' "$n")-page.html"
